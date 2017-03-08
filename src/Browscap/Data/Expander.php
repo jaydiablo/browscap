@@ -42,6 +42,10 @@ class Expander
      */
     private $logger = null;
 
+    private $patternId = [];
+
+    private $collectPatternIds = false;
+
     /**
      * Set the data collection
      *
@@ -51,6 +55,13 @@ class Expander
     public function setDataCollection(DataCollection $collection)
     {
         $this->collection = $collection;
+
+        return $this;
+    }
+
+    public function setCollectPatternIds($value)
+    {
+        $this->collectPatternIds = (bool) $value;
 
         return $this;
     }
@@ -89,6 +100,18 @@ class Expander
         return $this->expandProperties($allInputDivisions);
     }
 
+    private function resetPatternId()
+    {
+        $this->patternId = [
+            'division' => '',
+            'useragent' => '',
+            'platform' => '',
+            'device' => '',
+            'child' => '',
+            'engine' => '',
+        ];
+    }
+
     /**
      * Render a single division
      *
@@ -101,7 +124,12 @@ class Expander
     {
         $output = [];
 
+        $i = 0;
         foreach ($division->getUserAgents() as $uaData) {
+            $this->resetPatternId();
+            $this->patternId['division']  = $division->getFileName();
+            $this->patternId['useragent'] = $i;
+
             $output = array_merge(
                 $output,
                 $this->parseUserAgent(
@@ -112,6 +140,7 @@ class Expander
                     $divisionName
                 )
             );
+            ++$i;
         }
 
         return $output;
@@ -141,7 +170,8 @@ class Expander
         }
 
         if (array_key_exists('platform', $uaData)) {
-            $platform = $this->getDataCollection()->getPlatform($uaData['platform']);
+            $this->patternId['platform'] = $uaData['platform'];
+            $platform                    = $this->getDataCollection()->getPlatform($uaData['platform']);
 
             if (!$platform->isLite()) {
                 $lite = false;
@@ -153,7 +183,8 @@ class Expander
 
             $platformData = $platform->getProperties();
         } else {
-            $platformData = [];
+            $this->patternId['platform'] = '';
+            $platformData                = [];
         }
 
         if (array_key_exists('engine', $uaData)) {
@@ -195,13 +226,16 @@ class Expander
             return $output;
         }
 
+        $i = 0;
         foreach ($uaData['children'] as $child) {
+            $this->patternId['child'] = $i;
             if (isset($child['devices']) && is_array($child['devices'])) {
                 // Replace our device array with a single device property with our #DEVICE# token replaced
                 foreach ($child['devices'] as $deviceMatch => $deviceName) {
-                    $subChild           = $child;
-                    $subChild['match']  = str_replace('#DEVICE#', $deviceMatch, $subChild['match']);
-                    $subChild['device'] = $deviceName;
+                    $this->patternId['device'] = $deviceMatch;
+                    $subChild                  = $child;
+                    $subChild['match']         = str_replace('#DEVICE#', $deviceMatch, $subChild['match']);
+                    $subChild['device']        = $deviceName;
                     unset($subChild['devices']);
                     $output = array_merge(
                         $output,
@@ -209,11 +243,13 @@ class Expander
                     );
                 }
             } else {
-                $output = array_merge(
+                $this->patternId['device'] = '';
+                $output                    = array_merge(
                     $output,
                     $this->parseChildren($ua, $child, $lite, $standard)
                 );
             }
+            ++$i;
         }
 
         return $output;
@@ -268,8 +304,9 @@ class Expander
 
         if (isset($uaDataChild['platforms']) && is_array($uaDataChild['platforms'])) {
             foreach ($uaDataChild['platforms'] as $platform) {
-                $properties   = ['Parent' => $ua, 'lite' => $lite, 'standard' => $standard];
-                $platformData = $this->getDataCollection()->getPlatform($platform);
+                $this->patternId['platform'] = $platform;
+                $properties                  = ['Parent' => $ua, 'lite' => $lite, 'standard' => $standard];
+                $platformData                = $this->getDataCollection()->getPlatform($platform);
 
                 if (!$platformData->isLite()) {
                     $properties['lite'] = false;
@@ -312,6 +349,10 @@ class Expander
                     $childProperties = $uaDataChild['properties'];
 
                     $properties = array_merge($properties, $childProperties);
+                }
+
+                if ($this->collectPatternIds === true) {
+                    $properties['PatternId'] = $this->getPatternId();
                 }
 
                 $output[$uaBase] = $properties;
@@ -359,12 +400,31 @@ class Expander
                 $properties = array_merge($properties, $childProperties);
             }
 
-            $uaBase = str_replace('#PLATFORM#', '', $uaDataChild['match']);
+            $uaBase                      = str_replace('#PLATFORM#', '', $uaDataChild['match']);
+            $this->patternId['platform'] = '';
+
+            if ($this->collectPatternIds === true) {
+                $properties['PatternId'] = $this->getPatternId();
+            }
 
             $output[$uaBase] = $properties;
         }
 
         return $output;
+    }
+
+    private function getPatternId()
+    {
+        $id = sprintf(
+            '%s::u%d::c%d::d%s::p%s',
+            $this->patternId['division'],
+            $this->patternId['useragent'],
+            $this->patternId['child'],
+            $this->patternId['device'],
+            $this->patternId['platform']
+        );
+
+        return $id;
     }
 
     /**
